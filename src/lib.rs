@@ -445,6 +445,17 @@ impl Socket {
             headers: self.headers,
         }
     }
+
+    /// Transforms Socket into BinarySocket which is more convenient for handling
+    /// binary only messages.
+    pub fn into_binary(self) -> BinarySocket {
+        BinarySocket {
+            no: self.no,
+            tx: self.tx,
+            rx: self.rx,
+            headers: self.headers,
+        }
+    }
 }
 
 /// Represent a WebSocket connection. Used for sending and receiving text only
@@ -507,6 +518,75 @@ impl TextSocket {
         spawn(async move {
             while let Some(text) = i_rx.recv().await {
                 if let Err(_) = ws_tx.send(ws::Msg::Text(text)).await {
+                    break;
+                }
+            }
+        });
+
+        (tx, rx)
+    }
+}
+
+/// Represent a WebSocket connection. Used for sending and receiving binary only
+/// messages.
+///
+/// Each incoming message is transformed into Vec<u8>. Eventual other types of
+/// the messages (text) are ignored.
+pub struct BinarySocket {
+    pub no: usize,
+    tx: Sender<ws::Msg>,
+    rx: Receiver<ws::Msg>,
+    pub headers: HashMap<String, String>,
+}
+
+impl BinarySocket {
+    pub async fn send(&mut self, data: &[u8]) -> Result<(), Error> {
+        self.tx.send(ws::Msg::Binary(Vec::from(data))).await?;
+        Ok(())
+    }
+
+    /// Receives Vec<u8> from the other side of the Socket connection.
+    /// None is returned if the socket is closed.
+    pub async fn recv(&mut self) -> Option<Vec<u8>> {
+        BinarySocket::recv_one(&mut self.rx, &mut self.tx).await
+    }
+
+    /// Sends Vec<u8> to the other side of the Socket connection.
+    /// Errors if the socket is already closed.
+    pub async fn try_recv(&mut self) -> Result<Vec<u8>, Error> {
+        match self.recv().await {
+            None => Err(Error::SocketClosed),
+            Some(v) => Ok(v),
+        }
+    }
+
+    async fn recv_one(mut rx: &mut Receiver<ws::Msg>, mut tx: &mut Sender<ws::Msg>) -> Option<Vec<u8>> {
+        match Socket::recv_one(&mut rx, &mut tx, true).await {
+            Some(Msg::Binary(data)) => return Some(data),
+            _ => None,
+        }
+    }
+
+    /// Transforms Socket into pair of mpsc channels for sending/receiving
+    /// Vec<u8>.
+    pub async fn into_channel(self) -> (Sender<Vec<u8>>, Receiver<Vec<u8>>) {
+        let (tx, mut i_rx): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = mpsc::channel(1);
+        let (mut i_tx, rx): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = mpsc::channel(1);
+
+        let mut ws_rx = self.rx;
+        let mut ws_tx = self.tx.clone();
+        spawn(async move {
+            while let Some(data) = BinarySocket::recv_one(&mut ws_rx, &mut ws_tx).await {
+                if let Err(_) = i_tx.send(data).await {
+                    break;
+                }
+            }
+        });
+
+        let mut ws_tx = self.tx;
+        spawn(async move {
+            while let Some(data) = i_rx.recv().await {
+                if let Err(_) = ws_tx.send(ws::Msg::Binary(data)).await {
                     break;
                 }
             }
