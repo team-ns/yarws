@@ -561,7 +561,7 @@ impl BinarySocket {
     }
 
     async fn recv_one(mut rx: &mut Receiver<ws::Msg>, mut tx: &mut Sender<ws::Msg>) -> Option<Vec<u8>> {
-        match Socket::recv_one(&mut rx, &mut tx, true).await {
+        match Socket::recv_one(&mut rx, &mut tx, false).await {
             Some(Msg::Binary(data)) => return Some(data),
             _ => None,
         }
