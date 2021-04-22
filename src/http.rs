@@ -6,7 +6,7 @@ use sha1::{Digest, Sha1};
 use std::collections::HashMap;
 use std::str;
 use tokio;
-use tokio::prelude::*;
+use tokio::io::{AsyncRead, AsyncWrite};
 
 // Accepts http upgrade requests.
 // Parses http headers. Checks weather it is valid WebSocket upgrade request.
@@ -160,8 +160,8 @@ fn ws_accept(key: &str) -> String {
     let mut hasher = Sha1::new();
     let s = key.to_string() + WS_MAGIC_KEY;
 
-    hasher.input(s.as_bytes());
-    let hr = hasher.result();
+    sha1::Digest::update(&mut hasher, s.as_bytes());
+    let hr = hasher.finalize();
     base64::encode(&hr)
 }
 
@@ -205,8 +205,8 @@ mod tests {
     #[test]
     fn sha1_general() {
         let mut hasher = Sha1::new();
-        hasher.input(b"hello world");
-        let result = hasher.result();
+        sha1::Digest::update(&mut hasher, b"hello world");
+        let result = hasher.finalize();
         assert_eq!(result[..], hex!("2aae6c35c94fcfb415dbe95f408b9ce91ee846ed"));
     }
     #[test]
