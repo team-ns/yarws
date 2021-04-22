@@ -1,6 +1,6 @@
 use tokio;
-use tokio::io::BufReader;
-use tokio::prelude::*;
+use tokio::io::{BufReader, AsyncRead, AsyncWrite, AsyncReadExt, AsyncBufReadExt, AsyncWriteExt};
+use tokio::io;
 
 pub struct Stream<R, W> {
     pub rh: ReadHalf<R>,

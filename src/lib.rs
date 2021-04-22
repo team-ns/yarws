@@ -190,10 +190,9 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::spawn;
-use tokio::stream::StreamExt;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio_tls::TlsStream;
+use tokio_native_tls::TlsStream;
 
 #[macro_use]
 extern crate slog;
@@ -208,6 +207,7 @@ mod http;
 pub mod log;
 mod stream;
 mod ws;
+
 use stream::Stream;
 
 /// Binds tcp listener to the provided addr (ip:port).
@@ -222,7 +222,7 @@ pub async fn connect(url: &str) -> Result<Socket, Error> {
 
 async fn connect_tls(tcp_stream: TcpStream, url: &Url) -> Result<TlsStream<TcpStream>, Error> {
     let connector = native_tls::TlsConnector::new()?;
-    let connector = tokio_tls::TlsConnector::from(connector);
+    let connector = tokio_native_tls::TlsConnector::from(connector);
     let stream = connector.connect(&url.domain, tcp_stream).await?;
     Ok(stream)
 }
@@ -233,8 +233,8 @@ async fn connect_stream<T>(
     headers: Option<HashMap<String, String>>,
     log: Logger,
 ) -> Result<Socket, Error>
-where
-    T: AsyncWrite + AsyncRead + std::marker::Send + 'static,
+    where
+        T: AsyncWrite + AsyncRead + std::marker::Send + 'static,
 {
     let stream = Stream::new(raw_stream);
     let (stream, deflate_supported, headers) = http::connect(stream, &url, headers).await?; // upgrade tcp to ws
@@ -411,7 +411,7 @@ impl Socket {
     /// different function.
     pub async fn into_channel(self) -> (Sender<Msg>, Receiver<Msg>) {
         let (tx, mut i_rx): (Sender<Msg>, Receiver<Msg>) = mpsc::channel(1);
-        let (mut i_tx, rx): (Sender<Msg>, Receiver<Msg>) = mpsc::channel(1);
+        let (i_tx, rx): (Sender<Msg>, Receiver<Msg>) = mpsc::channel(1);
 
         let mut ws_rx = self.rx;
         let mut ws_tx = self.tx.clone();
@@ -423,7 +423,7 @@ impl Socket {
             }
         });
 
-        let mut ws_tx = self.tx;
+        let ws_tx = self.tx;
         spawn(async move {
             while let Some(msg) = i_rx.recv().await {
                 if let Err(_) = ws_tx.send(msg.into_ws_msg()).await {
@@ -502,7 +502,7 @@ impl TextSocket {
     /// Strings.
     pub async fn into_channel(self) -> (Sender<String>, Receiver<String>) {
         let (tx, mut i_rx): (Sender<String>, Receiver<String>) = mpsc::channel(1);
-        let (mut i_tx, rx): (Sender<String>, Receiver<String>) = mpsc::channel(1);
+        let (i_tx, rx): (Sender<String>, Receiver<String>) = mpsc::channel(1);
 
         let mut ws_rx = self.rx;
         let mut ws_tx = self.tx.clone();
@@ -514,7 +514,7 @@ impl TextSocket {
             }
         });
 
-        let mut ws_tx = self.tx;
+        let ws_tx = self.tx;
         spawn(async move {
             while let Some(text) = i_rx.recv().await {
                 if let Err(_) = ws_tx.send(ws::Msg::Text(text)).await {
@@ -571,7 +571,7 @@ impl BinarySocket {
     /// Vec<u8>.
     pub async fn into_channel(self) -> (Sender<Vec<u8>>, Receiver<Vec<u8>>) {
         let (tx, mut i_rx): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = mpsc::channel(1);
-        let (mut i_tx, rx): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = mpsc::channel(1);
+        let (i_tx, rx): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = mpsc::channel(1);
 
         let mut ws_rx = self.rx;
         let mut ws_tx = self.tx.clone();
@@ -583,7 +583,7 @@ impl BinarySocket {
             }
         });
 
-        let mut ws_tx = self.tx;
+        let ws_tx = self.tx;
         spawn(async move {
             while let Some(data) = i_rx.recv().await {
                 if let Err(_) = ws_tx.send(ws::Msg::Binary(data)).await {
@@ -721,20 +721,21 @@ impl Listener {
 
     // Listens for incoming tcp connections. Upgrades them to WebSocket and
     // feeds socket_tx channel with Socket for each established connection.
-    async fn listen(mut listener: TcpListener, log: Logger) -> Receiver<Socket> {
+    async fn listen(listener: TcpListener, log: Logger) -> Receiver<Socket> {
         let (socket_tx, socket_rx): (Sender<Socket>, Receiver<Socket>) = mpsc::channel(1);
 
         spawn(async move {
             let mut conn_no = 0;
-            let mut incoming = listener.incoming();
-            while let Some(conn) = incoming.next().await {
-                match conn {
-                    Ok(stream) => {
+            loop {
+                match listener.accept().await {
+                    Ok((stream, _)) => {
                         conn_no += 1;
                         let log = log.new(o!("conn" => conn_no));
                         spawn_accept(stream, socket_tx.clone(), conn_no, log).await;
                     }
-                    Err(e) => error!(log, "accept error: {}", e),
+                    Err(e) => {
+                        error!(log, "accept error: {}", e)
+                    }
                 }
             }
         });
@@ -753,7 +754,7 @@ async fn spawn_accept(stream: TcpStream, socket_tx: Sender<Socket>, no: usize, l
 
 // Upgrades tcp connection to the WebSocket, starts ws handler and returns new
 // Socket through socket_tx channel.
-async fn accept(tcp_stream: TcpStream, mut socket_tx: Sender<Socket>, no: usize, log: Logger) -> Result<(), Error> {
+async fn accept(tcp_stream: TcpStream, socket_tx: Sender<Socket>, no: usize, log: Logger) -> Result<(), Error> {
     let stream = Stream::new(tcp_stream);
     let (stream, deflate_supported, headers) = http::accept(stream).await?;
     let (rx, tx) = ws::start(stream, false, deflate_supported, log).await;
@@ -796,16 +797,19 @@ impl From<io::Error> for Error {
         Error::IoError { error: e }
     }
 }
+
 impl From<mpsc::error::SendError<ws::Msg>> for Error {
     fn from(e: mpsc::error::SendError<ws::Msg>) -> Self {
         Error::MsgSendError { error: e }
     }
 }
+
 impl From<mpsc::error::SendError<Vec<u8>>> for Error {
     fn from(e: mpsc::error::SendError<Vec<u8>>) -> Self {
         Error::RawSendError { error: e }
     }
 }
+
 impl From<mpsc::error::SendError<Socket>> for Error {
     fn from(e: mpsc::error::SendError<Socket>) -> Self {
         Error::SocketSendError { error: e }
@@ -865,6 +869,7 @@ fn parse_url(u: &str) -> Result<Url, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn test_parse_url() {
         let url = parse_url("ws://localhost:9001/path?pero=zdero").unwrap();

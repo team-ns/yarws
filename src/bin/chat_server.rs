@@ -52,7 +52,7 @@ async fn run(addr: &str, log: slog::Logger) -> Result<(), Error> {
     Ok(())
 }
 
-async fn client(socket: TextSocket, mut chat_tx: Sender<Subscription>) {
+async fn client(socket: TextSocket, chat_tx: Sender<Subscription>) {
     let client_id = socket.no;
     let (tx, mut rx) = socket.into_channel().await;
 
@@ -91,8 +91,8 @@ enum Subscription {
 
 async fn chat() -> Sender<Subscription> {
     // room
-    let (mut room_tx, mut room_rx): (Sender<String>, Receiver<String>) = mpsc::channel(1);
-    let (mut broker_tx, mut broker_rx): (Sender<String>, Receiver<String>) = mpsc::channel(1);
+    let (room_tx, mut room_rx): (Sender<String>, Receiver<String>) = mpsc::channel(1);
+    let (broker_tx, mut broker_rx): (Sender<String>, Receiver<String>) = mpsc::channel(1);
     let (sub_tx, mut sub_rx): (Sender<Subscription>, Receiver<Subscription>) = mpsc::channel(1);
 
     spawn(async move {

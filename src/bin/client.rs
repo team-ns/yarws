@@ -1,5 +1,5 @@
 use structopt::StructOpt;
-use tokio::time::{delay_for, Duration};
+use tokio::time::{sleep, Duration};
 use yarws::{Client, Error};
 
 #[derive(StructOpt, Debug)]
@@ -46,7 +46,7 @@ async fn main() -> Result<(), Error> {
         }
         repeat -= 1;
         if !args.no_wait {
-            delay_for(Duration::from_secs(1)).await;
+            sleep(Duration::from_secs(1)).await;
         }
     }
     Ok(())

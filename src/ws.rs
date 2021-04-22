@@ -7,10 +7,10 @@ use slog::Logger;
 use std::fmt;
 use std::str;
 use tokio;
-use tokio::prelude::*;
-use tokio::spawn;
+use tokio::{spawn, io};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::io::{AsyncRead, AsyncWrite};
 
 #[derive(Debug)]
 // Message for communication with upstream part of the library.
